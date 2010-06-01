@@ -35,10 +35,44 @@ Call it with:
   [php symfony swGitPluginMigration|INFO]
 EOF;
   }
+  
+  public function exec($cmd)
+  {
+    if(version_compare(SYMFONY_VERSION, '1.3.0', '<'))
+    {
+      $output = $this->getFilesystem()->sh($cmd);
+    }
+    else
+    {
+      list($output, $err) = $this->getFilesystem()->execute($cmd);
+    }
+    
+    return $output;
+  }
 
   protected function execute($arguments = array(), $options = array())
   {
     $plugin = $arguments['plugin'];
+    
+    $recreated = false;
+    if(!is_dir(sfConfig::get('sf_plugins_dir').'/'.$plugin))
+    {
+      $this->logSection('oups!!!', 'seems something went wrong... rescue plan activated !');
+      mkdir(sfConfig::get('sf_plugins_dir').'/'.$plugin);
+      
+      $cmd = sprintf('%s add --non-recursive %s', $options['svn'], sfConfig::get('sf_plugins_dir').'/'.$plugin);
+      $this->exec($cmd);
+      
+      $cmd = sprintf('%s ci --non-recursive %s -m "%s" ', 
+        $options['svn'], 
+        sfConfig::get('sf_plugins_dir'), 
+        sprintf($options['svn-commit-prefix'], 'commit back the folder ' . $plugin)
+      );
+      
+      $this->exec($cmd);
+      
+      $recreated = true;
+    }
     
     if(is_dir(sfConfig::get('sf_plugins_dir').'/'.$plugin.'/.git'))
     {
@@ -47,7 +81,8 @@ EOF;
     
     // check if the plugin is set as externals or installed
     $cmd = sprintf('%s pg svn:externals %s', $options['svn'], sfConfig::get('sf_plugins_dir'));
-    list($output, $err) = $this->getFilesystem()->execute($cmd);
+
+    $output = $this->exec($cmd);
     
     $external_offset  = false;
     $externals        = explode("\n", $output);
@@ -79,9 +114,9 @@ EOF;
       // update externals
       $this->getFileSystem()->touch('git_migration.tmp');
       file_put_contents('git_migration.tmp', $new_externals);
-      $cmd = sprintf('%s ps svn:externals2 -F %s %s', $options['svn'], 'git_migration.tmp', sfConfig::get('sf_plugins_dir'));
+      $cmd = sprintf('%s ps svn:externals -F %s %s', $options['svn'], 'git_migration.tmp', sfConfig::get('sf_plugins_dir'));
       
-      $this->getFilesystem()->execute($cmd);
+      $this->exec($cmd);
       $this->getFilesystem()->remove('git_migration.tmp');
       
       // commit the change to svn
@@ -92,17 +127,22 @@ EOF;
         sprintf($options['svn-commit-prefix'], 'update externals to remove the ' . $plugin . ' reference')
       );
 
-      // $this->getFilesystem()->execute($cmd);    
+      $this->exec($cmd);
       
       // remove the plugin folder
       $this->logSection('svn', 'delete current file content');
-      // $this->getFilesystem()->remove(sfConfig::get('sf_plugins_dir').'/'.$plugin);
-      
+      // remove current directory content
+      $this->getFileSystem()->remove(
+        sfFinder::type('any')
+          ->ignore_version_control(false)
+          ->in(sfConfig::get('sf_plugins_dir').'/'.$plugin)
+      );
+
       // create a new clean folder
       $this->getFilesystem()->mkdirs(sfConfig::get('sf_plugins_dir').'/'.$plugin);
 
       $cmd = sprintf('%s add --non-recursive %s', $options['svn'], sfConfig::get('sf_plugins_dir').'/'.$plugin);
-      $this->getFilesystem()->execute($cmd);
+      var_dump($this->exec($cmd));
     }
     else
     {
@@ -115,11 +155,19 @@ EOF;
     $this->getFilesystem()->touch($file);
     file_put_contents($file, $arguments['git-repository']);
 
-
     $task = new swGitRestoreTask($this->dispatcher, $this->formatter);
-    $task->setCommandApplication($this->commandApplication);
-    $task->setConfiguration($this->configuration);
-    $ret = $task->run(array(), array('plugins' => $plugin));
+    if(version_compare(SYMFONY_VERSION, '1.3.0', '<'))
+    {
+      $task->setCommandApplication($this->commandApplication);
+      // $task->setConfiguration($this->configuration);
+      $ret = $task->run(array(), array('--plugins='.$plugin));
+    }
+    else
+    {
+      $task->setCommandApplication($this->commandApplication);
+      $task->setConfiguration($this->configuration);
+      $ret = $task->run(array(), array('plugins' => $plugin));
+    }
 
     // 
     if(!is_file(sfConfig::get('sf_plugins_dir').'/'.$plugin.'/.gitignore'))
@@ -130,16 +178,21 @@ EOF;
     $content = trim(file_get_contents(sfConfig::get('sf_plugins_dir').'/'.$plugin.'/.gitignore'));
     if(strpos($content, '.svn') === false)
     {
-      $content .= "\n.svn";
+      $content .= "\n.svn\n";
     }
     
     file_put_contents(sfConfig::get('sf_plugins_dir').'/'.$plugin.'/.gitignore', $content);
+
+    // ignore git file
+    $this->logSection('svn','ingnore git files');
+    $cmd = sprintf('%s ps svn:ignore .git %s', $options['svn'], sfConfig::get('sf_plugins_dir').'/'.$plugin);
+    $this->exec($cmd);
     
-    if($external_offset !== false)
+    if($recreated || $external_offset !== false)
     {
       $this->logSection('svn','put back files to the svn directory');
-      $cmd = sprintf('%s add %s/*', $options['svn'], sfConfig::get('sf_plugins_dir').'/'.$plugin);
-      $this->getFilesystem()->execute($cmd);
+      $cmd = sprintf('%s add %s/* %s/.sw_git_migration', $options['svn'], sfConfig::get('sf_plugins_dir').'/'.$plugin, sfConfig::get('sf_plugins_dir').'/'.$plugin);
+      $this->exec($cmd);
       
       $this->logSection('svn','commit change into svn repository');
       $cmd = sprintf('%s ci %s -m "%s" ', 
@@ -148,7 +201,7 @@ EOF;
         sprintf($options['svn-commit-prefix'], 'add ' . $plugin . ' files')
       );
         
-      $this->getFilesystem()->execute($cmd);
+      $this->exec($cmd);
     }
   }
 }

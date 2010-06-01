@@ -33,6 +33,20 @@ Call it with:
   [php symfony swGitPluginMigration|INFO]
 EOF;
   }
+  
+  public function exec($cmd)
+  {
+    if(version_compare(SYMFONY_VERSION, '1.3.0', '<'))
+    {
+      $output = $this->getFilesystem()->sh($cmd);
+    }
+    else
+    {
+      list($output, $err) = $this->getFilesystem()->execute($cmd);
+    }
+    
+    return $output;
+  }
 
   protected function execute($arguments = array(), $options = array())
   {
@@ -75,7 +89,7 @@ EOF;
       // run the task to deploy a git repository over a svn repo
       $this->logSection($plugin, 'clone the repository');
       $cmd = sprintf('%s clone %s %s/.sw_git_migration_plugin', $options['git'], $git_repository, sfConfig::get('sf_plugins_dir'));
-      $this->getFilesystem()->execute($cmd);
+      $this->exec($cmd);
 
       $this->logSection($plugin, 'copy the content into the');
 
